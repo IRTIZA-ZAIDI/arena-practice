@@ -13,11 +13,11 @@ Models used: `Llama-2-13b-hf` (base, for truth) and `Meta-Llama-3.1-8B-Instruct`
 
 ## Big picture (what a linear probe *is*)
 
-A linear probe is a small classifier (a single direction `w` in activation space, optionally with normalization) that you train on top of a frozen LLM's hidden states. The hypothesis being tested: **some property `P` (truth, deception, high-stakes) is encoded as a roughly-linear direction in the residual stream.** If a simple linear classifier on hidden states predicts `P` well, that's evidence the model represents `P` linearly.
+A linear probe is a small classifier (a single direction `w` in activation space, optionally with normalization) trained on top of a frozen LLM's hidden states. The hypothesis being tested: **some property `P` (truth, deception, high-stakes) is encoded as a roughly-linear direction in the residual stream.** If a simple linear classifier on hidden states predicts `P` well, that's evidence the model represents `P` linearly.
 
 Two things to keep distinct throughout:
 1. **Classification accuracy** - does the probe predict the label?
-2. **Causal relevance** - does intervening on that direction actually change model behavior? Accuracy alone is not enough; you need interventions.
+2. **Causal relevance** - does intervening on that direction actually change model behavior? Accuracy alone is not enough; interventions are required.
 
 ---
 
@@ -273,7 +273,7 @@ finally:
 ### Why MM beats LR causally (mental model)
 - LR optimizes classification accuracy. It can lean on *any* feature that correlates with the label - including features the model itself doesn't actually use downstream.
 - MM is a coarse "where does the population move on average?" direction. It's noisier as a classifier but is forced to be aligned with the *bulk* of the activation shift between classes - which is more likely to be the thing the model is actually computing with.
-- This is the most important lesson of the whole section: **a more accurate probe is not a better probe.** "Better" depends on whether you want correlational or causal evidence.
+- This is the most important lesson of the whole section: **a more accurate probe is not a better probe.** "Better" depends on whether the goal is correlational or causal evidence.
 
 ### Learning
 - For interventions, get the masking right or nothing makes sense. Padding tokens, few-shot prefix tokens, and statement tokens all live in the same tensor; only the statement tokens should be patched.
@@ -293,11 +293,11 @@ Switch model: unload Llama-2-13B base, load **Llama-3.1-8B-Instruct**.
   - **Dishonest:** `"You are a deceptive AI assistant."`
   - Assistant content is the fact **minus its last 5 words** ("fact_start"), forcing the model to complete it under whichever persona.
   - Extract hidden states at the configured layer, average over assistant-content tokens (using the detection mask), one vector per (fact, persona).
-- Probed at `mid_layer = INSTRUCT_NUM_LAYERS // 2 = 16` (of 32). The paper's pre-trained 70B probe sits at layer 22/80 (~28th percentile) - naively scaling proportionally across model sizes is not exactly right; sweep when you can.
+- Probed at `mid_layer = INSTRUCT_NUM_LAYERS // 2 = 16` (of 32). The paper's pre-trained 70B probe sits at layer 22/80 (~28th percentile) - naively scaling proportionally across model sizes is not exactly right; sweep when compute allows.
 - Trained `MMProbe` and `LRProbe(C=0.001)` on `(dishonest=1, honest=0)`.
 - **Bonus**: multi-layer probe - trained a separate LR probe at each layer in the middle 50% (`INSTRUCT_DETECT_LAYERS`) and **averaged the per-layer scores**.
 - Implemented `DeceptionSteeringHook` to add `coef * direction` to the residual stream at a layer, with clean enable/disable lifecycle (`register_forward_hook` + `remove`). Steered model generations with negative coefficients (toward honesty) and positive coefficients (toward deception).
-- Implemented `score_dialogue`: per-token probe scores for a full chat, plus an assistant-only mask, so we can visualize *where in the response the probe fires*.
+- Implemented `score_dialogue`: per-token probe scores for a full chat, plus an assistant-only mask, to visualize *where in the response the probe fires*.
 - Evaluated on **AI Liar** (`how_to_catch_an_ai_liar/goal_directed_lying.json`): scenarios where the model is given context that pressures it to lie (e.g. selling a product it knows is harmful).
 
 ```python
@@ -484,18 +484,18 @@ def train_attention_probe(acts, masks, labels, n_heads=1, n_epochs=200,
 
 ---
 
-## Cross-cutting takeaways
+## Takeaways
 
 1. **Truth is linearly represented**, concentrated in early-to-mid layers (roughly 25–50% depth).
 2. **Cross-dataset generalization** is the real test of "did we find a universal direction" - improves with scale. In-distribution accuracy is a weak signal.
-3. **Classification accuracy ≠ causal relevance.** Always validate causally if you care about mechanism (interventions, steering, ablations).
+3. **Classification accuracy ≠ causal relevance.** Always validate causally when mechanism matters (interventions, steering, ablations).
 4. **MM ≥ LR for causality, LR ≥ MM for classification.** LR overfits to any correlation; MM is forced toward the bulk activation shift.
 5. **Same toolkit transfers** from factual truth → strategic deception → high-stakes detection, modulo:
    - Target type (model state vs. input property) - affects pooling.
    - Model type (base vs. instruct) - affects token masking and prompt construction.
    - Layer choice - sweep.
 6. **The probe fires early.** In deception detection, deceptive intent shows up in activations before any deceptive token is emitted. This is the property that makes probes useful as monitoring tools, not just post-hoc classifiers.
-7. **Get the masking right.** Last-real-token, assistant-content-only, statement-tokens-not-padding - the masking decisions silently determine whether you measure the thing you think you're measuring.
+7. **Get the masking right.** Last-real-token, assistant-content-only, statement-tokens-not-padding - the masking decisions silently determine whether the measurement matches the intent.
 
 ---
 

@@ -2,7 +2,7 @@
 
 Notes from ARENA [1.1] Transformers from Scratch. Companion to [1_1_Transformer_from_Scratch_exercises.ipynb](1_1_Transformer_from_Scratch_exercises.ipynb).
 
-A first-principles GPT-2 reimplementation, using the TransformerLens parameter conventions. The point is not to write something faster than HuggingFace, but to make every shape, weight, and activation legible enough that you can later do mech-interp on a real model and trust your mental picture.
+A first-principles GPT-2 reimplementation, using the TransformerLens parameter conventions. The point isn't speed - it's making every shape, weight, and activation legible enough to do mech-interp on a real model later and trust the mental picture.
 
 Reference model: `gpt2-small` via `HookedTransformer.from_pretrained(...)`. The custom `DemoTransformer` is built to be `load_state_dict`-compatible with it.
 
@@ -67,7 +67,7 @@ for _ in range(10):
 ### Learning
 - Logits at position `j` are about token `j+1`. This off-by-one shows up everywhere (loss shifts by one, eval shifts by one).
 - **Tokenization is leaky.** Leading space is part of the token. Common phrases form single tokens. Numbers split weirdly. Models that look bad at arithmetic are partly being failed by their tokenizer.
-- `from_pretrained(..., fold_ln=False, center_unembed=False, center_writing_weights=False)` is what you want when reimplementing the model. The defaults rewrite weights into a numerically equivalent form that won't match your fresh implementation.
+- `from_pretrained(..., fold_ln=False, center_unembed=False, center_writing_weights=False)` is the right call when reimplementing the model. The defaults rewrite weights into a numerically equivalent form that won't match a fresh implementation.
 
 ---
 
@@ -257,8 +257,8 @@ class DemoTransformer(nn.Module):
 - **LayerNorm: `sqrt(var + eps)`, not `std + eps`.** The two look similar and differ by ~1% for typical activations, which is exactly the kind of bug that lets every test pass except `TransformerBlock` (which compounds the error).
 - **Pre-norm vs post-norm matters.** In pre-norm (what GPT-2 uses) the residual stream stays "raw"; LayerNorm only fronts the sublayer inputs. This is what makes the residual stream meaningful as an interpretability object: the "real signal" persists across layers.
 - **Causal mask = `triu(diagonal=1)`.** Strictly above the diagonal is "future". `diagonal=0` would mask the diagonal too and break self-attention.
-- The `IGNORE` constant lives as a registered buffer so it follows the module to the right device/dtype. Don't hard-code `float("-inf")` inside `forward`; you'll get device mismatches.
-- Embedding is a lookup (`W_E[tokens]`), not a matmul. Conceptually it's `one_hot(tokens) @ W_E`, but you never materialize the one-hot.
+- The `IGNORE` constant lives as a registered buffer so it follows the module to the right device/dtype. Hard-coding `float("-inf")` inside `forward` causes device mismatches.
+- Embedding is a lookup (`W_E[tokens]`), not a matmul. Conceptually it's `one_hot(tokens) @ W_E`, but the one-hot is never materialized.
 
 ---
 
@@ -317,10 +317,10 @@ class TransformerTrainer:
 
 ### Results
 - Loss curve: starts near `log(d_vocab) ≈ 10.8` (uniform-distribution baseline), drops sharply, then plateaus.
-- The plateau corresponds roughly to learning **unigram + bigram** statistics. The "entropy of training data" baseline (`-sum p_x log p_x` over the training-token distribution) is the unigram lower bound; bigram statistics get you somewhat below that. Going further requires structure beyond local n-grams, which is what the rest of training works toward.
+- The plateau corresponds roughly to learning **unigram + bigram** statistics. The "entropy of training data" baseline (`-sum p_x log p_x` over the training-token distribution) is the unigram lower bound; bigram statistics push somewhat below that. Going further requires structure beyond local n-grams, which is what the rest of training works toward.
 
 ### Learning
-- The off-by-one in `get_log_probs` (`logits[:, :-1]` paired with `tokens[:, 1:]`) is the single most error-prone line in the whole notebook. Get it wrong and your loss is computed against the *current* token, which the model can trivially achieve by being an identity function; loss will collapse and the model will learn nothing.
+- The off-by-one in `get_log_probs` (`logits[:, :-1]` paired with `tokens[:, 1:]`) is the single most error-prone line in the whole notebook. Getting it wrong means the loss is computed against the *current* token, which the model can trivially achieve by being an identity function; loss collapses and the model learns nothing.
 - The shape of the loss curve is a *diagnostic*: a fast initial drop is the model learning the unigram distribution, the second knee is bigrams, then it plateaus until something architectural lets it learn longer-range structure.
 - Use `wandb.log({...}, step=self.step)` consistently. Mixing implicit step counters with explicit ones gives plots that look fine but are off by one batch.
 
@@ -328,7 +328,7 @@ class TransformerTrainer:
 
 ## 4. Sampling from a transformer
 
-Once trained, sampling decides *how* you turn a probability distribution over tokens into actual generated text. The notebook implements: greedy, basic categorical, temperature, frequency penalty, top-k, top-p (nucleus), and beam search. All live as `@staticmethod`s on `TransformerSampler`, dispatched by `sample_next_token` according to which kwargs are set.
+Once trained, sampling decides *how* a probability distribution over tokens becomes actual generated text. The notebook implements: greedy, basic categorical, temperature, frequency penalty, top-k, top-p (nucleus), and beam search. All live as `@staticmethod`s on `TransformerSampler`, dispatched by `sample_next_token` according to which kwargs are set.
 
 ### Tasks
 - `sample`: autoregressive loop. Encode prompt, repeatedly compute logits, take `logits[0, -1]`, call `sample_next_token(...)`, append, stop on `max_tokens_generated` or EOS.
@@ -467,18 +467,18 @@ class Beams:
 - **Beam search** with `no_repeat_ngram_size=2` and `num_beams=40` finds high-probability completions that greedy can miss, at the cost of higher per-step compute and a tendency toward generic, "averaged" continuations. Better for tasks with a clearer target (translation, summarization) than open-ended generation.
 
 ### Learning
-- `Categorical(logits=...)` is the right primitive. It accepts unnormalized logits, so you don't need to softmax-then-sample (which is the same thing but does the arithmetic twice).
+- `Categorical(logits=...)` is the right primitive. It accepts unnormalized logits, so softmax-then-sample isn't needed (it's the same thing but does the arithmetic twice).
 - Top-p needs to keep at least one token even when no prefix's cumulative prob exceeds `top_p` (rare with float, but always handle it via `min_tokens_to_keep=1`).
-- Beam search is *not* sampling. It's a search over likely sequences. If you want diversity, you want sampling; if you want a single high-probability completion, you want beam search.
+- Beam search is *not* sampling. It's a search over likely sequences. Diversity wants sampling; a single high-probability completion wants beam search.
 - The `no_repeat_ngram_size` trick is a cheap and effective de-loop hack. It encodes "if the last `n-1` tokens match the start of any previously-seen n-gram, ban its completion."
-- **KV caching** (bonus exercise in section 4 of the notebook): at generation time, attention's keys and values for past tokens never change. Storing them avoids recomputing the full attention each step. The speedup is real but usually smaller than the `seq_len` factor you'd naively expect, because the per-step cost is dominated by other things (MLPs, memory bandwidth).
+- **KV caching** (bonus exercise in section 4 of the notebook): at generation time, attention's keys and values for past tokens never change. Storing them avoids recomputing the full attention each step. The speedup is real but usually smaller than the naive `seq_len` factor, because the per-step cost is dominated by other things (MLPs, memory bandwidth).
 
 ---
 
 ## Takeaways
 
 1. **The residual stream is the actor.** Everything else is a side function that reads it (after LayerNorm) and writes back into it. This is what makes layers composable and analyzable.
-2. **Attention is the only inter-token operation.** MLPs are pointwise. If you want to know how information flows across positions, look at attention.
+2. **Attention is the only inter-token operation.** MLPs are pointwise. Information flow across positions lives entirely in attention.
 3. **Heads operate independently.** Same parameters, but disjoint subspaces of the residual stream. `n_heads * d_head` partitions `d_model` (sort of - actually each head reads/writes the full `d_model` via its own projections).
 4. **Pre-norm vs post-norm matters for interpretability,** not just training stability. Pre-norm keeps the residual stream "raw"; pretrained pre-norm models are far easier to reason about.
 5. **Tokenization is a leaky abstraction.** Numbers, casing, leading spaces, multi-byte unicode all do weird things. When the model looks dumb, blame the tokenizer first.

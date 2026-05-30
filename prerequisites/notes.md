@@ -53,8 +53,8 @@ arr8 = einops.reduce(arr, "(b1 b2) c (h h2) (w w2) -> c (b1 h) (b2 w)", "max",
 ```
 
 ### Learning
-- Whenever you write `(a b)` in einops, decide if you mean "outer a, inner b" or vice versa. Get this wrong and your image will be visibly wrong (interleaved instead of tiled), which is a great fast feedback loop.
-- `reduce` with a factored axis pattern is how you do pooling. The trick: pull out the pool window as its own axis (e.g. `(h h2)` with `h2=2`), then reduce over it.
+- Every `(a b)` in einops forces a choice: "outer a, inner b" or vice versa. Getting it wrong produces a visibly wrong image (interleaved instead of tiled), which is a great fast feedback loop.
+- `reduce` with a factored axis pattern is how pooling works. The trick: pull out the pool window as its own axis (e.g. `(h h2)` with `h2=2`), then reduce over it.
 
 ---
 
@@ -65,7 +65,7 @@ Rules (NumPy and PyTorch, identical):
 2. Two dims are compatible if equal, or one is 1.
 3. Size-1 dims get virtually expanded to the matching size.
 
-The two shape-fixers you need most:
+The two shape-fixers that come up most:
 - `tensor.unsqueeze(dim)` adds a size-1 axis.
 - `tensor.squeeze(dim)` removes a size-1 axis.
 
@@ -117,7 +117,7 @@ def sample_distribution(probs: Tensor, n: int) -> Tensor:
 ```
 
 ### Learning
-- `keepdim=True` is the difference between code that works and code that silently broadcasts wrong. Default to `keepdim=True` for any reduction you'll divide by.
+- `keepdim=True` is the difference between code that works and code that silently broadcasts wrong. Default to `keepdim=True` for any reduction whose result will be divided by.
 - The `(rand > cum).sum()` sampler is a great pattern. No loops, no `torch.multinomial`. The boolean tensor expansion replaces explicit search.
 
 ---
@@ -159,10 +159,10 @@ def collect_columns(matrix, column_indexes): return matrix[:, column_indexes]
 - `tensor[idx]` (integer array indexing): cleanest for "pick these rows / these positions / these coords". Works on multi-dim with `matrix[tuple(coords.T)]`.
 - `tensor.gather(dim, idx)`: needed when the lookup is **per-row**, e.g. for each row pick a different column. The index tensor must have the same `ndim` as the source, with all dims matching except `dim`.
 
-`gather` is what you reach for in cross-entropy loss (per-example pick the logit for the true class) and beam search.
+`gather` is the right tool for cross-entropy loss (per-example pick the logit for the true class) and beam search.
 
 ### Learning
-- If `idx.shape == src.shape` along all axes except one, you want `gather`. Otherwise you want integer indexing.
+- If `idx.shape == src.shape` along all axes except one, that's a `gather`. Otherwise integer indexing.
 
 ---
 
@@ -203,9 +203,9 @@ def classifier_accuracy(scores: Tensor, true_classes: Tensor) -> Tensor:
 ```
 
 ### Learning
-- `tensor.max(dim=...)` returns a `(values, indices)` namedtuple. You almost always want `.values`. This bit me until I burned it in.
+- `tensor.max(dim=...)` returns a `(values, indices)` namedtuple. The `.values` attribute is almost always what's wanted. This bit me until I burned it in.
 - Softmax is translation-invariant: `softmax(x) == softmax(x + c)` for any constant `c`. That's why the max-shift trick is exact, not an approximation.
-- Cross-entropy loss = `logsoftmax` + `gather` + negate. Don't write your own `exp` + `log` chain; you'll lose precision.
+- Cross-entropy loss = `logsoftmax` + `gather` + negate. A hand-rolled `exp` + `log` chain loses precision.
 
 ---
 
@@ -262,16 +262,16 @@ def einsum_outer(vec1, vec2):
 ```
 
 ### Learning
-- An axis appearing only in the **output** is invalid for einsum (it can't be made up from nothing). Use `einops.repeat` if you need to broadcast a new axis.
+- An axis appearing only in the **output** is invalid for einsum (it can't be made up from nothing). Use `einops.repeat` to broadcast a new axis.
 - For matmul-shaped ops, the shared axis is the "contracted" one and disappears from the output. This is the same intuition as `i j, j k -> i k`: `j` is shared, gets summed, only `i` and `k` survive.
 
 ---
 
-## Cross-cutting takeaways
+## Takeaways
 
 1. **Default to einops over `.view` / `.permute`** for anything beyond trivial reshapes. The axis labels make the intent explicit and the bugs visible.
-2. **`keepdim=True` on reductions** when you plan to divide or subtract; saves you the broadcasting headache.
+2. **`keepdim=True` on reductions** when the next step is divide or subtract; saves a broadcasting headache.
 3. **Subtract the max before exp** in any softmax/logsumexp pipeline. Always.
 4. **`tensor.max(dim=...).values`** to get the values out of the namedtuple.
 5. **`gather` for per-row lookups, integer indexing otherwise.** And `matrix[tuple(coords.T)]` for arbitrary-rank coordinate lookups.
-6. **`(a b)` vs `(b a)` in einops** is outer-vs-inner ordering. Get this right or your tensors are silently wrong.
+6. **`(a b)` vs `(b a)` in einops** is outer-vs-inner ordering. Get this right or tensors are silently wrong.

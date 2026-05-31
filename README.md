@@ -8,6 +8,7 @@ My working notes and exercise solutions for [ARENA 3.0](https://github.com/callu
 | [transformer_from_scratch/](transformer_from_scratch/) | [1.1] Transformers from Scratch | [1_1_Transformer_from_Scratch_exercises.ipynb](transformer_from_scratch/1_1_Transformer_from_Scratch_exercises.ipynb) | [notes.md](transformer_from_scratch/notes.md) |
 | [intro_to_mech_interp/](intro_to_mech_interp/) | [1.2] Intro to Mech Interp | [1_2_Intro_to_Mech_Interp_exercises.ipynb](intro_to_mech_interp/1_2_Intro_to_Mech_Interp_exercises.ipynb) | [notes.md](intro_to_mech_interp/notes.md) |
 | [linear_probe/](linear_probe/) | [1.3.1] Linear Probes | [1_3_1_Linear_Probes_exercises.ipynb](linear_probe/1_3_1_Linear_Probes_exercises.ipynb) | [notes.md](linear_probe/notes.md) |
+| [function_vector_&_model_steering/](function_vector_&_model_steering/) | [1.3.2] Function Vectors & Model Steering | [1_3_2_Function_Vectors_&_Model_Steering_exercises.ipynb](function_vector_&_model_steering/1_3_2_Function_Vectors_&_Model_Steering_exercises.ipynb) | [notes.md](function_vector_&_model_steering/notes.md) |
 
 ---
 
@@ -104,7 +105,29 @@ Reproducing pieces of three papers (Geometry of Truth, Deception Detection, High
 
 ---
 
-## Recurring lessons across all four
+## [function_vector_&_model_steering/](function_vector_&_model_steering/) - inference-time steering
+
+Two gradient-free intervention paradigms: **function vectors** (Todd et al.) on GPT-J-6B for ICL task transfer, and **activation addition / steering vectors** (Turner et al.) on GPT-2-XL for concept steering.
+
+**Libraries**
+- `nnsight` (`LanguageModel`, `model.trace(...)`, `tracer.invoke(...)`, `model.generate(...)`, `.save()` proxy persistence)
+- `transformers` (the underlying HuggingFace models: GPT-J-6B, GPT-2-XL)
+- `einops` (per-head z reshapes and the CIE stack rearrange)
+- `circuitsvis` (attention pattern visualization with the `Ġ` -> space substitution for BPE)
+
+**Skills**
+- Reading and writing the `nnsight` trace/invoke pattern. One trace = one batched forward pass with multiple sequential sub-passes that share state; intervention code is interleaved with the model's forward execution.
+- Building **ICL datasets** (`ICLSequence`, `ICLDataset`) with clean / corrupted variants. Corrupted = same surface form but shuffled answers in non-final demonstrations.
+- Implementing the **h-vector**: mean residual-stream hidden state at the final token across successful ICL prompts. Adding it back to a zero-shot prompt induces task-correct completions.
+- Combining "compute h" and "intervene with h" into a single trace via three sequential invokes (so h never leaves the GPU).
+- **Causal Indirect Effect (CIE)** for per-head attribution: clean run -> store mean per-head z at final position via `out_proj.input`; corrupted baseline -> measure correct-token logprob; intervened runs -> patch one head's final-position z with the clean mean, measure logprob improvement. All `n_layers * n_heads` interventions inside one trace.
+- Building the **function vector** from a list of `(layer, head)` pairs: zero out non-selected heads' z's, push through `out_proj`, sum across layers. Lives in residual-stream space.
+- **Multi-token generation interventions** via `model.generate(...)` and `generator.invoke(...)`: the intervention fires at every generation step within the block.
+- Implementing **activation-addition steering vectors**: pass two contrasting prompts through the model, take their layer-`L` activations, add the scaled difference to a third prompt's residual stream during generation. Replicated love/hate, weddings, and Eiffel-Rome examples on GPT-2-XL.
+
+---
+
+## Recurring lessons across all five
 
 - **Off-by-one is the universal bug.** Logits at position `j` predict token `j+1`. Loss, eval, intervention masking, and induction-stripe offsets all hinge on this.
 - **`keepdim=True` and `mask BEFORE softmax`.** Two small habits that prevent a surprising fraction of bugs.
@@ -113,3 +136,4 @@ Reproducing pieces of three papers (Geometry of Truth, Deception Detection, High
 - **Get the masking right or measure nothing useful.** Last-real-token, assistant-content-only, statement-tokens-not-padding, induction-stripe-at-offset-`-(seq_len-1)` - the masking choices silently determine what's actually being measured.
 - **Pre-norm residual stream is the protagonist** of a transformer. Layers read it (after LayerNorm) and add to it. Everything else is decoration.
 - **`FactoredMatrix` makes circuit analysis tractable.** Many interesting matrices are `(d_vocab, d_vocab)` = unmaterializable. Keep them factored and let the library handle norms, SVDs, and indexed slices lazily.
+- **The residual stream is a privileged additive bus.** Both function vectors and activation-addition steering work because adding a vector to the residual stream at the right layer composes cleanly with the rest of the forward pass. Gradient-free interventions exploit exactly this.

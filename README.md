@@ -9,6 +9,7 @@ My working notes and exercise solutions for [ARENA 3.0](https://github.com/callu
 | [intro_to_mech_interp/](intro_to_mech_interp/) | [1.2] Intro to Mech Interp | [1_2_Intro_to_Mech_Interp_exercises.ipynb](intro_to_mech_interp/1_2_Intro_to_Mech_Interp_exercises.ipynb) | [notes.md](intro_to_mech_interp/notes.md) |
 | [linear_probe/](linear_probe/) | [1.3.1] Linear Probes | [1_3_1_Linear_Probes_exercises.ipynb](linear_probe/1_3_1_Linear_Probes_exercises.ipynb) | [notes.md](linear_probe/notes.md) |
 | [function_vector_&_model_steering/](function_vector_&_model_steering/) | [1.3.2] Function Vectors & Model Steering | [1_3_2_Function_Vectors_&_Model_Steering_exercises.ipynb](function_vector_&_model_steering/1_3_2_Function_Vectors_&_Model_Steering_exercises.ipynb) | [notes.md](function_vector_&_model_steering/notes.md) |
+| [interpretability_with_SAEs/](interpretability_with_SAEs/) | [1.3.3] Interpretability with SAEs | [1_3_3_Interpretability_with_SAEs_exercises.ipynb](interpretability_with_SAEs/1_3_3_Interpretability_with_SAEs_exercises.ipynb) | [notes.md](interpretability_with_SAEs/notes.md) |
 
 ---
 
@@ -127,7 +128,35 @@ Two gradient-free intervention paradigms: **function vectors** (Todd et al.) on 
 
 ---
 
-## Recurring lessons across all five
+## [interpretability_with_SAEs/](interpretability_with_SAEs/) - sparse autoencoders
+
+End-to-end SAE interpretability on GPT-2-small, Gemma-2-2B, and TinyStories: load pretrained SAEs from SAELens, replicate Neuronpedia-style latent dashboards, attribute IOI to specific attention-SAE latents via DLA + ablation + attribution patching, do feature steering with GemmaScope, autointerp with held-out scoring, patch scoping for self-explanation, and finally train a small SAE from scratch.
+
+**Libraries**
+- `sae_lens` (`SAE`, `HookedSAETransformer`, `ActivationsStore`, `SAETrainingRunner`, `run_with_cache_with_saes`, `with model.saes(...)`)
+- `transformer_lens` (the underlying hooked transformer + hook API)
+- `sae_vis` (latent dashboards with max activations, histograms, top logits)
+- `umap-learn` + `hdbscan` (decoder-vector clustering for feature-splitting analysis)
+- OpenAI / Gemini API for autointerp + scoring
+- `circuitsvis` (attention visualization)
+
+**Skills**
+- Loading pretrained SAEs (`SAE.from_pretrained(release, sae_id)`) and attaching them via `run_with_cache_with_saes` or the `with model.saes(...)` context manager.
+- Reading `hook_sae_acts_post` cheaply with `stop_at_layer=sae.cfg.hook_layer + 1` and `names_filter` so dashboards scale to hundreds of latents.
+- Toggling `use_error_term` to control whether the model sees `x_hat` alone or `x_hat + (x - x_hat)`.
+- Building Neuronpedia-style dashboards from scratch: activation histogram, max-activating examples with ±buffer context, non-overlapping top-k via `get_k_largest_indices(..., no_overlap=True)`, top/bottom unembed logits, autointerp.
+- Implementing attention-SAE analysis with **DFA** (`attn_weight * value @ W_enc_latent`) - per-source-token contribution to a destination latent firing.
+- The **IOI playbook**: rank latents by max activation -> filter via Direct Logit Attribution (project decoder through `W_O` then `W_U`-diff) -> confirm causally with single-latent ablation at the relevant `seq_pos`.
+- **Attribution patching** as a fast ablation proxy via gradient * activation. Forward + backward once, compute all latents' ablation-effect approximations.
+- **Feature steering**: hook the SAE site, add `coeff * sae.W_dec[latent_idx]` to all positions during generation. Reproduced on GemmaScope-2B.
+- **Feature splitting** detection across SAE widths (768 to 6144+): three approaches (co-firing positions, same-prompt overlap, autointerp keyword search) + UMAP+HDBSCAN visualization of decoder vectors.
+- **Autointerp scoring**: split max-activating examples into explain / score halves; LLM generates a description from one half; LLM scores held-out examples against the description.
+- **Patch scoping** for self-explanation: replace residual at the `X` position with the normalized + scaled decoder direction in an instruction-tuned model and let it verbalize the latent. KV-cache-aware (only patch on the first forward).
+- **Training an SAE from scratch** with `SAETrainingRunner` on TinyStories-1L MLP-out: tuning `l1_coefficient`, l1 warm-up, expansion factor, and reading training curves (L0, dead-latent fraction, reconstruction MSE, CE-with-vs-without-SAE).
+
+---
+
+## Recurring lessons across all six
 
 - **Off-by-one is the universal bug.** Logits at position `j` predict token `j+1`. Loss, eval, intervention masking, and induction-stripe offsets all hinge on this.
 - **`keepdim=True` and `mask BEFORE softmax`.** Two small habits that prevent a surprising fraction of bugs.
@@ -137,3 +166,4 @@ Two gradient-free intervention paradigms: **function vectors** (Todd et al.) on 
 - **Pre-norm residual stream is the protagonist** of a transformer. Layers read it (after LayerNorm) and add to it. Everything else is decoration.
 - **`FactoredMatrix` makes circuit analysis tractable.** Many interesting matrices are `(d_vocab, d_vocab)` = unmaterializable. Keep them factored and let the library handle norms, SVDs, and indexed slices lazily.
 - **The residual stream is a privileged additive bus.** Both function vectors and activation-addition steering work because adding a vector to the residual stream at the right layer composes cleanly with the rest of the forward pass. Gradient-free interventions exploit exactly this.
+- **Activation alone is not interpretation.** A probe that classifies, a latent that fires, or a head whose attention pattern matches a target - none of these are causal claims. Always validate with intervention (ablation, attribution patching, steering) before concluding mechanism.

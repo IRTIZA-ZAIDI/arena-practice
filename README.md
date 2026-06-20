@@ -10,6 +10,7 @@ My working notes and exercise solutions for [ARENA 3.0](https://github.com/callu
 | [linear_probe/](linear_probe/) | [1.3.1] Linear Probes | [1_3_1_Linear_Probes_exercises.ipynb](linear_probe/1_3_1_Linear_Probes_exercises.ipynb) | [notes.md](linear_probe/notes.md) |
 | [function_vector_&_model_steering/](function_vector_&_model_steering/) | [1.3.2] Function Vectors & Model Steering | [1_3_2_Function_Vectors_&_Model_Steering_exercises.ipynb](function_vector_&_model_steering/1_3_2_Function_Vectors_&_Model_Steering_exercises.ipynb) | [notes.md](function_vector_&_model_steering/notes.md) |
 | [interpretability_with_SAEs/](interpretability_with_SAEs/) | [1.3.3] Interpretability with SAEs | [1_3_3_Interpretability_with_SAEs_exercises.ipynb](interpretability_with_SAEs/1_3_3_Interpretability_with_SAEs_exercises.ipynb) | [notes.md](interpretability_with_SAEs/notes.md) |
+| [activation_oracles/](activation_oracles/) | [1.3.4] Activation Oracles | [1_3_4_Activation_Oracles_exercises.ipynb](activation_oracles/1_3_4_Activation_Oracles_exercises.ipynb) | [notes.md](activation_oracles/notes.md) |
 
 ---
 
@@ -156,7 +157,30 @@ End-to-end SAE interpretability on GPT-2-small, Gemma-2-2B, and TinyStories: loa
 
 ---
 
-## Recurring lessons across all six
+## [activation_oracles/](activation_oracles/) - open-ended interp via finetuned interpreters
+
+LoRA-finetune another model (the **Activation Oracle**) to accept a target model's residual-stream activations as input tokens and answer arbitrary natural-language questions about them. Replicates the Karvonen et al. (2025) paper: secret-word extraction from "taboo" finetunes (Figure 1), goal extraction from system-prompt personas, emotion tracking, misalignment detection, model-diffing via activation differences on an emergently misaligned Llama-3.1-8B.
+
+**Libraries**
+- `transformers` (Qwen3-8B and Llama-3.1-8B-Instruct as both target and oracle base; `apply_chat_template`)
+- `peft` (LoRA loading, `model.load_adapter`, `model.set_adapter`, `model.disable_adapter()`)
+- PyTorch forward hooks for activation capture + steering
+
+**Skills**
+- The full AO pipeline: forward-hook activation capture with `EarlyStopException`, `?`-token placeholder prefix (`Layer: X\n ? ? ? \n<question>`), `find_pattern_in_tokens` to locate them, norm-matched steering hook at the oracle's layer 1 that skips KV-cached single-token forwards.
+- `OracleInput` dataclass + `create_oracle_input` that bundles `input_ids`, `layer`, `steering_vectors`, `positions`.
+- Adapter management with PEFT: `model.set_adapter("oracle")` / `model.set_adapter("taboo")` / `model.disable_adapter()` to switch between target/oracle/base on one set of weights.
+- Three query modes (`full_seq`, `segment`, `single_token`) and the diagnostic uses of each (full-seq for general behavior, segment for "where in the prompt is X encoded", single-token for token-by-token decoding of representation accumulation).
+- **Hypothesis tests** for what the oracle is really reading: segment-after-keyword (rules out embedding-only reading), comparison against logit-lens top-k (rules out "just argmax").
+- **Taboo / secret extraction**: load taboo LoRA -> assistant-segment activations -> constrained oracle prompt + `forced_model_prefix` for clean single-word extraction.
+- **Goal extraction** with no target LoRA, just a system prompt; segment after the system prompt so the oracle reads behavior, not text.
+- **Misalignment detection** via the `<|im_end|>` boundary token as a single-token oracle input site (paper finding: punctuation / end-of-turn tokens are empirically strong probe positions).
+- **Model-diffing**: collect base activations (adapters disabled) and finetuned activations (EM LoRA active), subtract, feed the difference into the oracle. Describes what the finetune changed.
+- Sweep across secret words and layer fractions (10/25/50/75/90%) -> heatmap. Confirms middle layers are best (matches the oracle's training distribution at 25/50/75% depths).
+
+---
+
+## Recurring lessons across all seven
 
 - **Off-by-one is the universal bug.** Logits at position `j` predict token `j+1`. Loss, eval, intervention masking, and induction-stripe offsets all hinge on this.
 - **`keepdim=True` and `mask BEFORE softmax`.** Two small habits that prevent a surprising fraction of bugs.
@@ -167,3 +191,4 @@ End-to-end SAE interpretability on GPT-2-small, Gemma-2-2B, and TinyStories: loa
 - **`FactoredMatrix` makes circuit analysis tractable.** Many interesting matrices are `(d_vocab, d_vocab)` = unmaterializable. Keep them factored and let the library handle norms, SVDs, and indexed slices lazily.
 - **The residual stream is a privileged additive bus.** Both function vectors and activation-addition steering work because adding a vector to the residual stream at the right layer composes cleanly with the rest of the forward pass. Gradient-free interventions exploit exactly this.
 - **Activation alone is not interpretation.** A probe that classifies, a latent that fires, or a head whose attention pattern matches a target - none of these are causal claims. Always validate with intervention (ablation, attribution patching, steering) before concluding mechanism.
+- **Interp tools are only valid in their training distribution.** Probes work at the layers they were trained on; SAEs decode the site they were trained on; Activation Oracles read activations from the layer depths they were trained on (25/50/75% for the AO paper). Going outside the trained range degrades silently rather than loudly.

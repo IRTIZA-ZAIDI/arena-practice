@@ -2,6 +2,8 @@
 
 My working notes and exercise solutions for [ARENA 3.0](https://github.com/callummcdougall/ARENA_3.0). Each directory contains a notebook (the exercises) and a `notes.md` (what I did, key code snippets, results, learnings).
 
+For an API cheat sheet across all the exercises that use `transformer_lens`, see [transformerlens.md](indirect_object_identification/transformerlens.md).
+
 | Dir | ARENA chapter | Notebook | Notes |
 |-----|---------------|----------|-------|
 | [prerequisites/](prerequisites/) | [0.0] Prerequisites | [0_0_Prerequisites_exercises.ipynb](prerequisites/0_0_Prerequisites_exercises.ipynb) | [notes.md](prerequisites/notes.md) |
@@ -11,6 +13,7 @@ My working notes and exercise solutions for [ARENA 3.0](https://github.com/callu
 | [function_vector_&_model_steering/](function_vector_&_model_steering/) | [1.3.2] Function Vectors & Model Steering | [1_3_2_Function_Vectors_&_Model_Steering_exercises.ipynb](function_vector_&_model_steering/1_3_2_Function_Vectors_&_Model_Steering_exercises.ipynb) | [notes.md](function_vector_&_model_steering/notes.md) |
 | [interpretability_with_SAEs/](interpretability_with_SAEs/) | [1.3.3] Interpretability with SAEs | [1_3_3_Interpretability_with_SAEs_exercises.ipynb](interpretability_with_SAEs/1_3_3_Interpretability_with_SAEs_exercises.ipynb) | [notes.md](interpretability_with_SAEs/notes.md) |
 | [activation_oracles/](activation_oracles/) | [1.3.4] Activation Oracles | [1_3_4_Activation_Oracles_exercises.ipynb](activation_oracles/1_3_4_Activation_Oracles_exercises.ipynb) | [notes.md](activation_oracles/notes.md) |
+| [indirect_object_identification/](indirect_object_identification/) | [1.4.1] Indirect Object Identification | [1_4_1_Indirect_Object_Identification_exercises.ipynb](indirect_object_identification/1_4_1_Indirect_Object_Identification_exercises.ipynb) | [notes.md](indirect_object_identification/notes.md) |
 
 ---
 
@@ -180,7 +183,27 @@ LoRA-finetune another model (the **Activation Oracle**) to accept a target model
 
 ---
 
-## Recurring lessons across all seven
+## [indirect_object_identification/](indirect_object_identification/) - reverse-engineering the IOI circuit
+
+End-to-end replication of the Wang et al. (2022) IOI circuit on GPT-2-small: logit attribution -> activation patching -> path patching -> head validation -> minimal-circuit construction. The canonical "early-mid-late" picture (duplicate / induction -> S-inhibition -> name movers) emerges concretely.
+
+**Libraries**
+- `transformer_lens` (the heavy use - `HookedTransformer`, `ActivationCache` with `accumulated_resid` / `decompose_resid` / `stack_head_results` / `apply_ln_to_stack`, the `patching` module, hand-rolled `run_with_hooks` for path patching, `IOIDataset` from the part34 utils)
+- `einops` (per-head rearrangements, logit-direction projections)
+- `circuitsvis` (per-head attention pattern visualization)
+
+**Skills**
+- Loading GPT-2-small with the four interp-friendly flags (`center_unembed`, `center_writing_weights`, `fold_ln`, `refactor_factored_attn_matrices`).
+- Building ABBA/BABA paired prompts + an `answer_tokens` `(IO, S)` tensor; defining the `logits_to_ave_logit_diff` metric and the `(diff - corrupted) / (clean - corrupted)` calibrated `ioi_metric`.
+- **Direct logit attribution**: project residual-stream components onto `W_U[:, IO] - W_U[:, S]` *after* `cache.apply_ln_to_stack(..., layer=-1)`. Three views via `accumulated_resid` (logit lens by layer), `decompose_resid` (per-component), `stack_head_results` (per (layer, head) heatmap).
+- **Activation patching** sweeps via `patching.get_act_patch_resid_pre`, `get_act_patch_block_every`, `get_act_patch_attn_head_out_all_pos`; hand-rolled versions for `patch_residual_component` and `patch_head_vector` using `model.run_with_hooks`.
+- **Path patching**: three-pass algorithm that freezes all attention heads to clean values except one sender, captures the modified `resid_post[-1]`, then swaps it back into a fresh clean run. Identifies Name Mover heads (head -> final residual) and the K-composition feeding S-Inhibition heads (head -> downstream V).
+- **Head validation** via writing-direction scatter plots (attention to IO vs IO-direction logit contribution), `W_E @ W_OV @ W_U` copying-score matrices, attention-pattern-shape checks for duplicate-token / induction / S-inhibition / previous-token heads.
+- **Minimal circuit construction**: mean-ablate non-circuit heads (using ABC-corrupted mean), measure faithfulness/completeness/minimality.
+
+---
+
+## Recurring lessons across all eight
 
 - **Off-by-one is the universal bug.** Logits at position `j` predict token `j+1`. Loss, eval, intervention masking, and induction-stripe offsets all hinge on this.
 - **`keepdim=True` and `mask BEFORE softmax`.** Two small habits that prevent a surprising fraction of bugs.
@@ -192,3 +215,4 @@ LoRA-finetune another model (the **Activation Oracle**) to accept a target model
 - **The residual stream is a privileged additive bus.** Both function vectors and activation-addition steering work because adding a vector to the residual stream at the right layer composes cleanly with the rest of the forward pass. Gradient-free interventions exploit exactly this.
 - **Activation alone is not interpretation.** A probe that classifies, a latent that fires, or a head whose attention pattern matches a target - none of these are causal claims. Always validate with intervention (ablation, attribution patching, steering) before concluding mechanism.
 - **Interp tools are only valid in their training distribution.** Probes work at the layers they were trained on; SAEs decode the site they were trained on; Activation Oracles read activations from the layer depths they were trained on (25/50/75% for the AO paper). Going outside the trained range degrades silently rather than loudly.
+- **Build claims out of converging evidence, not single experiments.** A head is "a Name Mover" only when logit attribution, path patching, attention-pattern check, and OV-copying scores all agree. Any one alone can mislead; the conjunction is the standard.

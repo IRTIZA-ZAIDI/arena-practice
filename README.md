@@ -14,6 +14,7 @@ For an API cheat sheet across all the exercises that use `transformer_lens`, see
 | [interpretability_with_SAEs/](interpretability_with_SAEs/) | [1.3.3] Interpretability with SAEs | [1_3_3_Interpretability_with_SAEs_exercises.ipynb](interpretability_with_SAEs/1_3_3_Interpretability_with_SAEs_exercises.ipynb) | [notes.md](interpretability_with_SAEs/notes.md) |
 | [activation_oracles/](activation_oracles/) | [1.3.4] Activation Oracles | [1_3_4_Activation_Oracles_exercises.ipynb](activation_oracles/1_3_4_Activation_Oracles_exercises.ipynb) | [notes.md](activation_oracles/notes.md) |
 | [indirect_object_identification/](indirect_object_identification/) | [1.4.1] Indirect Object Identification | [1_4_1_Indirect_Object_Identification_exercises.ipynb](indirect_object_identification/1_4_1_Indirect_Object_Identification_exercises.ipynb) | [notes.md](indirect_object_identification/notes.md) |
+| [sae_circuits/](sae_circuits/) | [1.4.2] SAE Circuits | [1_4_2_SAE_Circuits_exercises.ipynb](sae_circuits/1_4_2_SAE_Circuits_exercises.ipynb) | [notes.md](sae_circuits/notes.md), [circuit-tracer.md](sae_circuits/circuit-tracer.md) |
 
 ---
 
@@ -203,7 +204,30 @@ End-to-end replication of the Wang et al. (2022) IOI circuit on GPT-2-small: log
 
 ---
 
-## Recurring lessons across all eight
+## [sae_circuits/](sae_circuits/) - assembling SAE latents into circuits
+
+Four passes at the "how do latents compose across layers" question: pairwise latent-Jacobians, transcoder pullbacks (input-free), full attribution graphs on a linearized model, and end-to-end circuit-tracing on the Dallas/Austin two-hop factual-recall circuit. Companion tutorial for the library used in Section 4: [circuit-tracer.md](sae_circuits/circuit-tracer.md).
+
+**Libraries**
+- `sae_lens` (residual-stream SAEs on GPT-2, MLP transcoders on GPT-2, GemmaScope 2 transcoders on Gemma-3-1B-IT)
+- `torch.func.jacrev` with `has_aux=True` for the sparse latent Jacobians
+- `transformer_lens` for the underlying hooked model + freeze/replacement hooks
+- `circuit_tracer` (`ReplacementModel`, `attribute`, `feature_intervention`, `feature_intervention_generate`)
+- `hdbscan` + `umap-learn` (feature-cluster analysis) - unchanged from the earlier SAE exercises
+
+**Skills**
+- Cross-layer **latent Jacobians** via a `SparseTensor` representation and `torch.func.jacrev(fn, argnums=0, has_aux=True)`. Applied to latent-to-latent, token-to-latent, and latent-to-logit variants.
+- **Transcoders**: input-free pullbacks `sae_lower.W_dec[i] @ sae_upper.W_enc[:, j]`, de-embedding `W_E @ W_enc[:, latent]`, and the **extended embedding** trick (`W_E + MLP_0(W_E)`) to break GPT-2's tied-embedding degeneracy.
+- **Blind case study**: interpret a latent using four converging analyses (de-embedding, logit lens, pullback, attention attribution) with no other information.
+- **Linearizing the model**: `FreezeHooks` (attention patterns + LayerNorm scales cached and replayed) + `TranscoderReplacementHooks` (MLP forward stays exact via skip-connection trick, backward routed through the linear surrogate). Preserves forward-pass logits within 1e-4.
+- Building an **attribution graph**: reading/writing vector abstraction for 4 node types (embedding, latent, MLP error, logit), demeaned unembed columns for output nodes, batched backward passes to compute the adjacency matrix, row-normalize + Neumann-series influence + two-stage pruning.
+- **`circuit-tracer` library**: `ReplacementModel.from_pretrained("google/gemma-2-2b", "gemma", backend="transformerlens")`, `attribute(prompt, model)`, `feature_intervention(prompt, [(layer, pos, feat_idx, value)...])`, `feature_intervention_generate` with sliced positions for sustained interventions.
+- **Supernode-level ablations** on the Dallas/Austin circuit: predict-then-test protocol; cross-prompt feature swaps (Texas -> California -> Sacramento, Texas -> China -> Beijing) demonstrating compositional slot-filling.
+- **Manual attribution matrices** (bonus): explicit component-by-component propagation (`map_through_ln`, `map_through_attn`, `map_through_mlp`) as a verification path for the gradient-based method.
+
+---
+
+## Recurring lessons across all nine
 
 - **Off-by-one is the universal bug.** Logits at position `j` predict token `j+1`. Loss, eval, intervention masking, and induction-stripe offsets all hinge on this.
 - **`keepdim=True` and `mask BEFORE softmax`.** Two small habits that prevent a surprising fraction of bugs.
@@ -216,3 +240,4 @@ End-to-end replication of the Wang et al. (2022) IOI circuit on GPT-2-small: log
 - **Activation alone is not interpretation.** A probe that classifies, a latent that fires, or a head whose attention pattern matches a target - none of these are causal claims. Always validate with intervention (ablation, attribution patching, steering) before concluding mechanism.
 - **Interp tools are only valid in their training distribution.** Probes work at the layers they were trained on; SAEs decode the site they were trained on; Activation Oracles read activations from the layer depths they were trained on (25/50/75% for the AO paper). Going outside the trained range degrades silently rather than loudly.
 - **Build claims out of converging evidence, not single experiments.** A head is "a Name Mover" only when logit attribution, path patching, attention-pattern check, and OV-copying scores all agree. Any one alone can mislead; the conjunction is the standard.
+- **Predict-then-test on interventions.** Writing down predicted ablation effects before running the code separates real understanding from post-hoc rationalization. Matches the pattern in IOI, activation oracles, and the Dallas/Austin circuit in SAE circuits.

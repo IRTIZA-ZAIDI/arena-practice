@@ -8,6 +8,8 @@ Paper: [Activation Oracles](https://arxiv.org/abs/2512.15674) (Karvonen et al., 
 
 Models used: **Qwen3-8B** (most exercises) and **Llama-3.1-8B-Instruct** (model-diffing on the emergently misaligned LoRA). Both the target model and the oracle are the **same base architecture**; the oracle is a separate LoRA loaded onto the same weights and swapped in/out via PEFT.
 
+> Visual companion: [activation_oracles.excalidraw](activation_oracles.excalidraw) - full-notebook diagram with sections covering the big picture (two-forward pipeline + LoRA swap), the three query modes with hypothesis tests, the 5-step "build it from scratch" pipeline, the three applications (taboo / goal / model-diffing), a layer-sweep heatmap, and training-recipe cards. Math intuition boxes (∂) and prerequisite callouts (★) inline.
+
 ---
 
 ## Big picture (what an AO *is*, operationally)

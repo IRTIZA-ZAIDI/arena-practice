@@ -9,6 +9,8 @@ Replicates pieces of three papers:
 
 Models used: `Llama-2-13b-hf` (base, for truth) and `Meta-Llama-3.1-8B-Instruct` (for deception + high-stakes).
 
+> Visual companion: [linear_probe.excalidraw](linear_probe.excalidraw) - full-notebook diagram with 6 sections (big picture, PCA + layer sweep, MM vs LR probes, causal interventions with NIE, deception probing with chat masking, attention probes / AttnLite). Math intuition boxes (∂) and prerequisite callouts (★) inline.
+
 ---
 
 ## Big picture (what a linear probe *is*)

@@ -173,6 +173,8 @@ pullback = earlier_writes @ target_read                      # (n_latents,)
 
 The main technical exercise of the notebook. Build a full attribution graph over transcoder latents, embeddings, MLP errors, and output logits - with **linearized flow through the model** so every edge weight is exact rather than a local approximation.
 
+> Visual companion: [sae_circuits.excalidraw](sae_circuits.excalidraw) - a full-notebook diagram with 7 sections covering latent gradients, transcoders, the local replacement model, reading/writing vector abstraction, the attribution graph in grid form, the end-to-end pipeline, and interventions. Math intuition boxes (∂) and prerequisite callouts (★) inline.
+
 ### Tasks
 
 **Setup**: loaded Gemma-3-1B-IT (using HF gated access via `HF_TOKEN`) and the GemmaScope 2 transcoder stack for every layer. GemmaScope 2 provides 8 transcoders per layer (2 widths x 2 sparsities x 2 affine variants); used `width=16k, l0=small, affine=True, instruction_tuned=True`.

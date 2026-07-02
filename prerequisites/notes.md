@@ -2,6 +2,8 @@
 
 Notes from ARENA [0.0] Prerequisites. Companion to [0_0_Prerequisites_exercises.ipynb](0_0_Prerequisites_exercises.ipynb).
 
+> Visual companion: [prerequisites.excalidraw](prerequisites.excalidraw) - full-notebook diagram covering tensor mental model, einops.rearrange with concrete shape examples, reduce+repeat+the (h1 h2) grouping trick, broadcasting rules table, einsum syntax anatomy + common patterns, and gather/argmax/indexing. Math intuition boxes (∂) and prerequisite callouts (★) inline.
+
 Scope: getting fluent with `einops`, `einsum`, broadcasting, indexing, and the numerical patterns (logsumexp / softmax / cross-entropy) that show up everywhere downstream.
 
 ---

@@ -15,6 +15,7 @@ For an API cheat sheet across all the exercises that use `transformer_lens`, see
 | [activation_oracles/](activation_oracles/) | [1.3.4] Activation Oracles | [1_3_4_Activation_Oracles_exercises.ipynb](activation_oracles/1_3_4_Activation_Oracles_exercises.ipynb) | [notes.md](activation_oracles/notes.md), [activation_oracles.excalidraw](activation_oracles/activation_oracles.excalidraw) |
 | [indirect_object_identification/](indirect_object_identification/) | [1.4.1] Indirect Object Identification | [1_4_1_Indirect_Object_Identification_exercises.ipynb](indirect_object_identification/1_4_1_Indirect_Object_Identification_exercises.ipynb) | [notes.md](indirect_object_identification/notes.md) |
 | [sae_circuits/](sae_circuits/) | [1.4.2] SAE Circuits | [1_4_2_SAE_Circuits_exercises.ipynb](sae_circuits/1_4_2_SAE_Circuits_exercises.ipynb) | [notes.md](sae_circuits/notes.md), [circuit-tracer.md](sae_circuits/circuit-tracer.md), [sae_circuits.excalidraw](sae_circuits/sae_circuits.excalidraw) |
+| [balanced_bracket/](balanced_bracket/) | [1.5.1] Balanced Bracket Classifier | [1_5_1_Balanced_Bracket_Classifier_exercises.ipynb](balanced_bracket/1_5_1_Balanced_Bracket_Classifier_exercises.ipynb) | [notes.md](balanced_bracket/notes.md), [balanced_bracket.excalidraw](balanced_bracket/balanced_bracket.excalidraw) |
 
 ---
 
@@ -227,7 +228,32 @@ Four passes at the "how do latents compose across layers" question: pairwise lat
 
 ---
 
-## Recurring lessons across all nine
+## [balanced_bracket/](balanced_bracket/) - toy-model reverse engineering
+
+Reverse-engineering a 3-layer bidirectional transformer that classifies whether a bracket string is balanced. Discovers the "elevation circuit": head 0.0 tallies opens minus closes over the suffix, MLPs 0/1 threshold that signal nonlinearly, head 2.0 copies the result from position 1 to position 0 where the classifier reads it. First BERT-style (bidirectional, [CLS]-at-position-0) target model in the curriculum.
+
+**Libraries**
+- `transformer_lens` (`HookedTransformer` with a custom pretrained bracket classifier, hooked activations, `utils.get_act_name`, `ActivationCache`)
+- `sklearn.linear_model.LinearRegression` (linear approximation of LayerNorm for direction analysis)
+- `einops` (per-component decompositions of the residual stream)
+- `plotly` (histograms per component, attention patterns, neuron activation curves)
+- `torch` forward hooks for activation patching on Q vs K
+
+**Skills**
+- Reading a **bidirectional** transformer: no causal mask, but padding IS masked. Classification at seq position 0 only (like BERT's [CLS]).
+- **Back-propagating a direction** through the classifier tail: `post_final_ln_dir = W_U[:, 0] - W_U[:, 1]`, then through a **linear fit to LayerNorm** to get `pre_final_ln_dir`, then through `W_OV` of head 2.0 + LN2 fit to get `pre_20_dir` at position 1.
+- **Linear approximation of LayerNorm**: fit `sklearn.LinearRegression` from LN input to LN output; verify R^2 approx 1; use the coefficient matrix as `L_final` so LN acts like a linear map for direction analysis.
+- **Component decomposition of the residual stream** into 10 additive terms (1 embed + 6 heads + 3 MLPs); per-component histograms of dot product with the unbalanced direction to find responsible components.
+- **Failure-mode classification** for unbalanced strings: `total_elevation_failure` (unequal counts) vs `negative_failure` (unmatched open bracket reading right-to-left). Split histograms by failure type to identify which components handle which failure mode.
+- **OV-circuit analysis**: `W_OV = W_V @ W_O`; use `emb(char) @ L0.T @ W_OV` to see which residual direction each character token gets mapped to. Cosine similarity of `v_L`, `v_R` approx -1 reveals head 0.0's OV is one-dimensional (a signed elevation).
+- **Per-neuron analysis** in MLPs: `f(x @ W_in + b_in) * W_out[i, :]` per neuron; project onto the target direction; plot per-neuron output against the sequence's open-proportion to find "threshold detector" neurons.
+- **Attention-pattern reading** for head 2.0 (attends only to position 1 from query 0 = "just moves info") and head 0.0 (uniform attention over the suffix = "tally averaged over positions").
+- **Activation patching on Q vs K** to figure out which side of an attention head drives a given behavior.
+- Working out the full circuit forwards: embed -> head 0.0 uniform-attention writes elevation to resid[1] -> MLPs 0/1 threshold nonlinearly -> head 2.0 moves signal to resid[0] -> classifier reads unbalanced direction.
+
+---
+
+## Recurring lessons across all ten
 
 - **Off-by-one is the universal bug.** Logits at position `j` predict token `j+1`. Loss, eval, intervention masking, and induction-stripe offsets all hinge on this.
 - **`keepdim=True` and `mask BEFORE softmax`.** Two small habits that prevent a surprising fraction of bugs.

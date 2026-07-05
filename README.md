@@ -16,6 +16,8 @@ For an API cheat sheet across all the exercises that use `transformer_lens`, see
 | [indirect_object_identification/](indirect_object_identification/) | [1.4.1] Indirect Object Identification | [1_4_1_Indirect_Object_Identification_exercises.ipynb](indirect_object_identification/1_4_1_Indirect_Object_Identification_exercises.ipynb) | [notes.md](indirect_object_identification/notes.md) |
 | [sae_circuits/](sae_circuits/) | [1.4.2] SAE Circuits | [1_4_2_SAE_Circuits_exercises.ipynb](sae_circuits/1_4_2_SAE_Circuits_exercises.ipynb) | [notes.md](sae_circuits/notes.md), [circuit-tracer.md](sae_circuits/circuit-tracer.md), [sae_circuits.excalidraw](sae_circuits/sae_circuits.excalidraw) |
 | [balanced_bracket/](balanced_bracket/) | [1.5.1] Balanced Bracket Classifier | [1_5_1_Balanced_Bracket_Classifier_exercises.ipynb](balanced_bracket/1_5_1_Balanced_Bracket_Classifier_exercises.ipynb) | [notes.md](balanced_bracket/notes.md), [balanced_bracket.excalidraw](balanced_bracket/balanced_bracket.excalidraw) |
+| [toy_models_of_superposition/](toy_models_of_superposition/) | [1.5.4] Toy Models of Superposition & SAEs | [1_5_4_Toy_Models_of_Superposition_&_SAEs_exercises.ipynb](toy_models_of_superposition/1_5_4_Toy_Models_of_Superposition_&_SAEs_exercises.ipynb) | [notes.md](toy_models_of_superposition/notes.md), [toy_models_of_superposition.excalidraw](toy_models_of_superposition/toy_models_of_superposition.excalidraw) |
+| [llm_psychology_&_persona_vectors/](llm_psychology_&_persona_vectors/) | [4.4] LLM Psychology & Persona Vectors | [4_4_LLM_Psychology_&_Persona_Vectors_exercises_pt01.ipynb](llm_psychology_&_persona_vectors/4_4_LLM_Psychology_&_Persona_Vectors_exercises_pt01.ipynb), [4_4_LLM_Psychology_&_Persona_Vectors_exercises_pt02.ipynb](llm_psychology_&_persona_vectors/4_4_LLM_Psychology_&_Persona_Vectors_exercises_pt02.ipynb) | [notes.md](llm_psychology_&_persona_vectors/notes.md), [llm_psychology_&_persona_vectors.excalidraw](llm_psychology_&_persona_vectors/llm_psychology_&_persona_vectors.excalidraw) |
 
 ---
 
@@ -253,7 +255,72 @@ Reverse-engineering a 3-layer bidirectional transformer that classifies whether 
 
 ---
 
-## Recurring lessons across all ten
+## [toy_models_of_superposition/](toy_models_of_superposition/) - the geometry of superposition + SAE variants
+
+Replicating Anthropic's [Toy Models of Superposition](https://transformer-circuits.pub/2022/toy_model/index.html) on a tiny 2D->5D->2D->5D autoencoder-like network, then studying feature geometry (pentagons, antipodal pairs, dimensionality metric), replicating the Deep Double Descent paper on the same toy model, and finally training standard, Gated, and JumpReLU SAEs on the toy model's hidden states.
+
+**Libraries**
+- `torch` + `torch.nn` (bare-metal `nn.Parameter` weights, hand-rolled forward passes)
+- `einops` (all forward math uses `einops.einsum` for shape-safe contractions)
+- `torch.autograd.Function` for straight-through-estimator gradients (JumpReLU)
+- `plotly` (the animated training visualizations - `animation-training-*.html` in this dir)
+- `numpy` (a small amount for LR schedules and correlated-batch sampling)
+
+**Skills**
+- Understanding **superposition** as a bet on sparsity: how many features > dimensions gets packed into non-orthogonal directions, tolerating interference in exchange for representation.
+- Distinguishing **non-privileged basis** (`h = W x`, invariant to orthogonal rotation of W) vs **privileged basis** (`h = ReLU(W x)`, no such invariance because ReLU isn't rotation-equivariant).
+- Reading `W^T W` as an interference matrix: diagonal = per-feature representation strength, off-diagonal = per-pair cross-talk.
+- Building a **ToyModel** with `n_inst` parallel independent models (batched over the instances dim so I can sweep sparsity/importance/correlation in one training loop).
+- Implementing importance-weighted MSE loss with the right reduction pattern (mean over batch + features, sum over instances).
+- Generating **correlated** and **anticorrelated feature pairs** and observing the geometry shift (correlated -> orthogonal, anticorrelated -> antipodal).
+- Building a **NeuronModel** (privileged basis) and a **NeuronComputationModel** that computes `abs(x)` for `x in [-1, 1]`, forcing the hidden ReLU to actually fire.
+- Recognizing the **asymmetric superposition motif** where one neuron encodes two features with unequal input weights, plus a corrective neuron to fix the leakage - trades on the terminal ReLU truncating negative outputs.
+- Computing the **squared Frobenius norm** `||W||_F^2` as a total-features-represented metric.
+- Computing per-feature **dimensionality** `D_i = ||W_i||^2 / sum_j(W_i_hat . W_j)^2` and reading the sticky points at 1, 1/2, 2/5, 2/3, ... as regular polytope geometries.
+- Replicating **Deep Double Descent**: fix a small batch and train the toy model repeatedly. Memorising solutions (data in superposition) win at small batch sizes; generalising solutions (features in superposition) win at large batch sizes; a test-loss SPIKE separates the two.
+- Building a **ToySAE**: `z = ReLU(W_enc(h - b_dec) + b_enc)`, `h' = W_dec z + b_dec`, trained on FROZEN toy-model hidden states `h`. Untied `W_enc` vs `W_dec`. L1 penalty on `z` scaled by decoder-row norms (to prevent the model rescaling around L1).
+- Implementing **dead-latent resampling** (both simple and advanced): find latents that haven't fired, replace their encoder weights with random hard-to-reconstruct input examples, zero out decoder weights and scale the fresh ones to match alive latents.
+- Building a **Gated SAE**: separate binary gate path (`W_gate`, `b_gate`, Heaviside) from magnitude path (`W_mag = exp(r_mag) * W_gate`, `b_mag`, ReLU), with elementwise product. Auxiliary loss `||x - x_hat(ReLU(pi_gate))||^2` (detached decoder) prevents degenerate gate-off solutions. Fixes both the "features are binary" and "shrinkage" problems.
+- Building a **JumpReLU SAE**: activation `z * H(z - theta)` with a LEARNED per-latent threshold `theta = exp(log_theta)`. Direct L0 penalty rather than L1.
+- Implementing **straight-through estimators** via `torch.autograd.Function`: rectangle-kernel bump function `K(u) = H(u+1/2) - H(u-1/2)` gives the fake gradient for both Heaviside and JumpReLU wrt `theta`. Functional intuition = smooth approximation of the CDF; probabilistic intuition = kernel density estimation of the expected-loss derivative.
+- Recognizing when to use each SAE variant: standard L1 is the baseline; Gated fixes shrinkage but adds an auxiliary loss; JumpReLU is simpler than Gated with similar or better performance, but sparser training signal to `theta`.
+
+---
+
+## [llm_psychology_&_persona_vectors/](llm_psychology_&_persona_vectors/) - persona directions in activation space
+
+Replicating two Anthropic papers back-to-back: [The Assistant Axis](https://www.anthropic.com/research/assistant-axis) (Lu et al.) discovers a single global direction capturing "how assistant-like" a model is behaving, and [Persona Vectors](https://www.anthropic.com/research/persona-vectors) (Chen et al.) extracts trait-specific vectors (sycophancy, hallucination, evil, ...) via contrastive prompting. Uses Gemma 2 27B, Qwen 3 32B, and Qwen 2.5 7B Instruct across sections.
+
+**Libraries**
+- `transformers` (Gemma 2 27B, Qwen 3 32B, Qwen 2.5 7B - all loaded with `device_map="auto"` for multi-GPU sharding)
+- `openai` client pointed at OpenRouter for autorater API calls (`google/gemma-2-27b-it`, `claude-3-5-haiku-20241022`, `gpt-4.1-mini`)
+- `ThreadPoolExecutor` + `tqdm.as_completed` for parallel API generation
+- PyTorch forward hooks (`register_forward_hook`) wrapped in context managers for all activation interventions
+- `sklearn.decomposition.PCA` for persona-space geometry
+- `plotly` for cosine-sim heatmaps, PCA scatter, 1D axis projections, per-trait projection boxplots
+- `sae_lens` (Gemma-Scope) for interpreting the sycophancy vector via SAE latent decomposition
+
+**Skills**
+- Persona-space extraction pipeline (**Assistant Axis paper**): 20 personas x 15 questions -> generate responses via OpenRouter API -> autorater filter (0-3 scale for staying in character) -> hook Gemma at layer 30 -> extract mean activation over RESPONSE tokens per (persona, question) -> average within persona -> persona vector of shape `(4608,)`.
+- Chat-template plumbing for models WITHOUT a native system role (Gemma 2): `_normalize_messages` merges system content into the first user message. For models WITH a system role (Qwen): use directly.
+- `format_messages` for computing `response_start_idx` (the token index where the assistant response starts) via `apply_chat_template(..., add_generation_prompt=True)` on messages[:-1].
+- Extracting persona-space geometry: cosine similarity matrix (subtract global mean first), PCA, and the "Assistant Axis" = direction from mean-of-role-play toward mean-of-assistant-personas. Verifying PC1 correlates strongly with the axis.
+- 1D projection visualization: rank personas by cosine similarity with the Assistant Axis (red = anti-assistant like ghost/leviathan, blue = assistant-like like consultant/analyst).
+- **Passive monitoring**: `ConversationAnalyzer` slices per-turn activation spans from a single forward pass over a multi-turn transcript, projects each turn onto the Assistant Axis, and correlates with autorater harm scores.
+- **Additive activation steering** at ALL positions during prefill (not just last token): `h_layer += alpha * axis_steer` modifies the KV cache during prefill so subsequent generation reads modified keys/values. Steering direction is pre-scaled by "persona gap" so alpha=1.0 means one full persona shift.
+- **Conditional activation capping**: `ActivationCapper` context manager applies `h -= (proj - tau).clamp(min=0) * v_hat` at multiple target layers using pre-computed capping vectors + thresholds (Qwen 3 32B, from the paper). A ceiling cap in the role-play direction (equivalent under sign flip to the paper's floor-clamp on the assistant axis).
+- **Contrastive prompting pipeline** (**Persona Vectors paper**): for each trait (`sycophantic`, `evil`, `hallucinating`, `impolite`, `optimistic`, `humorous`, `apathetic`): load pre-generated trait artifacts (5 pos/neg instruction pairs + 20 questions + eval prompt) -> generate response pairs -> score with autorater -> `filter_effective_pairs` keeps only pairs where pos_score > neg_score by margin -> `extract_contrastive_vectors` = `mean(pos_activations) - mean(neg_activations)` per layer -> `(num_layers, d_model)` trait tensor -> plot vector norm across layers to find "best" layer for steering.
+- Autorater fallback logic (Claude Haiku refuses on "evil"/"hallucinating" traits -> fall back to GPT-4.1-mini via `AUTORATER_MODEL_GPT`).
+- `ActivationSteerer` context manager with THREE position modes (`"all"`, `"prompt"`, `"response"`) - the standard pattern for inference-time activation steering.
+- Projection-based monitoring (from persona-vectors `eval/cal_projection.py`): `projection = (activation @ vector) / vector.norm()` at the trait layer. Applied to (baseline / positive-prompted / steered) conditions to verify the vector actually captures the trait.
+- **Multi-trait pipeline refactor**: `run_trait_pipeline(model, tokenizer, trait_name, trait_data, layer, coefficients, override)` handles generate -> score -> filter -> extract -> steer -> evaluate with disk caching via `load_or_generate(path, generate_fn, description)` helper. Run for 7 traits in one loop.
+- Multi-trait geometry: cross-trait cosine similarity matrix. Most pairs have |cos_sim| < 0.5 -> traits capture GENUINELY different behavioral dimensions. The Assistant Axis is probably a weighted combination of several of these.
+- SAE-based interpretation: run a Gemma-Scope SAE on the sycophancy vector to see which atomic features it decomposes into (excessive agreement, flattery, affirming user opinion).
+- Bonus: finetuning-induced persona shift monitoring + preventative steering during finetuning.
+
+---
+
+## Recurring lessons across all twelve
 
 - **Off-by-one is the universal bug.** Logits at position `j` predict token `j+1`. Loss, eval, intervention masking, and induction-stripe offsets all hinge on this.
 - **`keepdim=True` and `mask BEFORE softmax`.** Two small habits that prevent a surprising fraction of bugs.
